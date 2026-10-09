@@ -6,82 +6,116 @@ namespace NhanAZ\ItemSender;
 
 use pocketmine\command\Command;
 use pocketmine\command\CommandSender;
-use pocketmine\plugin\PluginBase;
-use pocketmine\player\Player;
 use pocketmine\network\mcpe\protocol\PlaySoundPacket;
+use pocketmine\player\Player;
+use pocketmine\plugin\PluginBase;
 use pocketmine\utils\TextFormat;
 
 class Main extends PluginBase {
 
-	private function playSound(Player $player, string $soundName) {
-		$playerPos = $player->getPosition();
-		$player->getNetworkSession()->sendDataPacket(
-			PlaySoundPacket::create(
-				soundName: $soundName,
-				x: $playerPos->getX(),
-				y: $playerPos->getY(),
-				z: $playerPos->getZ(),
-				volume: 1.0,
-				pitch: 1.0
-			)
-		);
+	private const MESSAGE_KEYS = [
+		"cmdInTerminal", "argumentsBlank", "invalidTarget", "invalidInput", "sendYourself",
+		"sendAir", "notEnoughItems", "notEnoughSpace", "sentSuccessfully", "receivedSuccessfully"
+	];
+
+	/** @var array<string, string> */
+	private array $messages = [];
+
+	protected function onEnable(): void {
+		$this->saveDefaultConfig();
+		foreach (self::MESSAGE_KEYS as $key) {
+			$message = $this->getConfig()->get($key);
+			if (!is_string($message)) {
+				$this->getLogger()->error("ItemSender config entry $key must be a string.");
+				$this->getServer()->getPluginManager()->disablePlugin($this);
+				return;
+			}
+			$this->messages[$key] = $message;
+		}
+	}
+
+	/** @param array<string, string> $replacements */
+	private function message(string $key, array $replacements = []): string {
+		$template = $this->messages[$key] ?? throw new \LogicException("Missing ItemSender message $key.");
+		return TextFormat::colorize(str_replace(array_keys($replacements), array_values($replacements), $template));
+	}
+
+	private function playSound(Player $player, string $soundName): void {
+		$position = $player->getPosition();
+		$packet = new PlaySoundPacket();
+		$packet->soundName = $soundName;
+		$packet->x = $position->getX();
+		$packet->y = $position->getY();
+		$packet->z = $position->getZ();
+		$packet->volume = 1.0;
+		$packet->pitch = 1.0;
+		$player->getNetworkSession()->sendDataPacket($packet);
+	}
+
+	/** @param array<string, string> $replacements */
+	private function reject(Player $sender, string $key, array $replacements = []): bool {
+		$sender->sendMessage($this->message($key, $replacements));
+		$this->playSound($sender, "mob.villager.no");
+		return true;
 	}
 
 	public function onCommand(CommandSender $sender, Command $command, string $label, array $args): bool {
-		if ($command->getName() === "itemsender") {
-			if (!$sender instanceof Player) {
-				$sender->sendMessage(TextFormat::colorize($this->getConfig()->get("cmdInTerminal")));
-				return true;
-			}
-			if (!isset($args[0]) || !isset($args[1])) {
-				$sender->sendMessage(TextFormat::colorize($this->getConfig()->get("argumentsBlank")));
-				$this->playSound($sender, "mob.villager.no");
-				return false;
-			}
-			$target = $this->getServer()->getPlayerByPrefix($args[0]);
-			if (!$target) {
-				$sender->sendMessage(TextFormat::colorize(str_replace("{target}", $args[0], $this->getConfig()->get("invalidTarget"))));
-				$this->playSound($sender, "mob.villager.no");
-				return true;
-			}
-			// TODO: Support <amount> > 64
-			if (!ctype_digit($args[1]) || $args[1] < 1 || $args[1] > 64) {
-				$sender->sendMessage(TextFormat::colorize($this->getConfig()->get("invalidInput")));
-				$this->playSound($sender, "mob.villager.no");
-				return true;
-			}
-			if ($sender == $target) {
-				$sender->sendMessage(TextFormat::colorize($this->getConfig()->get("sendYourself")));
-				$this->playSound($sender, "mob.villager.no");
-				return true;
-			}
-			$targetName = $target->getName();
-			$senderName = $sender->getName();
-			$item = $sender->getInventory()->getItemInHand();
-			$itemName = $item->getName();
-			if ($item->isNull()) {
-				$sender->sendMessage(TextFormat::colorize(str_replace(["{air}", "{target}"], [$itemName, $targetName], $this->getConfig()->get("sendAir"))));
-				$this->playSound($sender, "mob.villager.no");
-				return true;
-			}
-			if ($item->getCount() < $args[1]) {
-				$sender->sendMessage(TextFormat::colorize(str_replace(["{itemCount}", "{itemName}", "{target}"], [$args[1], $itemName, $targetName], $this->getConfig()->get("notEnoughItems"))));
-				$this->playSound($sender, "mob.villager.no");
-				return true;
-			}
-			if (!$target->getInventory()->canAddItem($item->setCount((int) $args[1]))) {
-				$sender->sendMessage(TextFormat::colorize(str_replace("{target}", $targetName, $this->getConfig()->get("notEnoughSpace"))));
-				$this->playSound($sender, "mob.villager.no");
-				return true;
-			}
-			$sender->getInventory()->removeItem($item->setCount((int) $args[1]));
-			$target->getInventory()->addItem($item->setCount((int) $args[1]));
-			$sender->sendMessage(TextFormat::colorize(str_replace(["{itemCount}", "{itemName}", "{target}"], [$args[1], $itemName, $targetName], $this->getConfig()->get("sentSuccessfully"))));
-			$this->playSound($sender, "mob.villager.yes");
-			$target->sendMessage(TextFormat::colorize(str_replace(["{itemCount}", "{itemName}", "{target}"], [$args[1], $itemName, $senderName], $this->getConfig()->get("receivedSuccessfully"))));
-			$this->playSound($target, "mob.villager.yes");
+		if ($command->getName() !== "itemsender") {
+			return false;
+		}
+		if (!$sender instanceof Player) {
+			$sender->sendMessage($this->message("cmdInTerminal"));
 			return true;
 		}
-		return false;
+		if (!isset($args[0], $args[1])) {
+			return $this->reject($sender, "argumentsBlank");
+		}
+		$target = $this->getServer()->getPlayerExact($args[0]);
+		if ($target === null) {
+			return $this->reject($sender, "invalidTarget", ["{target}" => $args[0]]);
+		}
+		$amount = TransferRules::parseAmount($args[1]);
+		if ($amount === null) {
+			return $this->reject($sender, "invalidInput");
+		}
+		if ($target === $sender) {
+			return $this->reject($sender, "sendYourself");
+		}
+
+		$senderInventory = $sender->getInventory();
+		$item = $senderInventory->getItemInHand();
+		$itemName = $item->getName();
+		$targetName = $target->getName();
+		if ($item->isNull()) {
+			return $this->reject($sender, "sendAir", ["{air}" => $itemName, "{target}" => $targetName]);
+		}
+		if ($item->getCount() < $amount) {
+			return $this->reject($sender, "notEnoughItems", ["{itemCount}" => (string) $amount, "{itemName}" => $itemName, "{target}" => $targetName]);
+		}
+
+		$sendStack = clone $item;
+		$sendStack->setCount($amount);
+		$targetInventory = $target->getInventory();
+		if (!$targetInventory->canAddItem($sendStack)) {
+			return $this->reject($sender, "notEnoughSpace", ["{target}" => $targetName]);
+		}
+		$leftovers = $targetInventory->addItem($sendStack);
+		$notAdded = 0;
+		foreach ($leftovers as $leftover) {
+			$notAdded += $leftover->getCount();
+		}
+		$sent = $amount - $notAdded;
+		if ($sent <= 0) {
+			return $this->reject($sender, "notEnoughSpace", ["{target}" => $targetName]);
+		}
+		$item->setCount($item->getCount() - $sent);
+		$senderInventory->setItemInHand($item);
+
+		$details = ["{itemCount}" => (string) $sent, "{itemName}" => $itemName];
+		$sender->sendMessage($this->message("sentSuccessfully", $details + ["{target}" => $targetName]));
+		$this->playSound($sender, "mob.villager.yes");
+		$target->sendMessage($this->message("receivedSuccessfully", $details + ["{target}" => $sender->getName()]));
+		$this->playSound($target, "mob.villager.yes");
+		return true;
 	}
 }

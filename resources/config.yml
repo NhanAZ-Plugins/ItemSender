@@ -5,7 +5,7 @@ argumentsBlank: "&cPlease do not leave arguments blank!"
 
 invalidTarget: "&cThe target with the name &b{target} &cdoes not exist or is not online!"
 
-invalidInput: "&b<amount>&c is not valid! (1 ≥ <amount: int> ≤ 64)"
+invalidInput: "&b<amount>&c must be a whole number from 1 to 64."
 
 sendYourself: "&cYou can't send items to yourself!"
 
