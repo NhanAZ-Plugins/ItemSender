@@ -7,9 +7,6 @@ Send items from the held stack to an online Axolotl-PM player
 [![License](https://img.shields.io/github/license/NhanAZ-Plugins/ItemSender)](https://github.com/NhanAZ-Plugins/ItemSender/blob/master/LICENSE)
 [![Discord](https://img.shields.io/discord/986553214889517088?label=Discord&logo=discord&logoColor=white&color=5865F2)](https://discord.gg/j2X83ujT6c)
 
-## Overview
-
-This plugin targets the PocketMine-MP and Axolotl-PM API 5 ecosystem and is maintained under [NhanAZ-Plugins](https://github.com/NhanAZ-Plugins).
 
 ## Requirements and compatibility
 
